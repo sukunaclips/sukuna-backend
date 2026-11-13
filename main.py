@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 OUT = Path(os.getenv("OUTPUT_DIR", "outputs"))
@@ -200,3 +201,8 @@ def process(
     except Exception as e:
         shutil.rmtree(work, ignore_errors=True)
         raise HTTPException(500, f"Error procesando el video: {e}")
+
+
+@app.get("/")
+def home():
+    return FileResponse(Path(__file__).parent / "index.html")
