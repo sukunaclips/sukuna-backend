@@ -55,16 +55,24 @@ _model = None
 
 
 def transcribe(path):
-    """Devuelve [(inicio, fin, texto)]. Si no hay Whisper, devuelve []."""
+    """Devuelve [(inicio, fin, texto)]. Usa poca memoria: audio mono 16 kHz."""
     global _model
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         return []
-    if _model is None:
-        _model = WhisperModel(WHISPER_MODEL, compute_type="int8")
-    segments, _ = _model.transcribe(str(path), vad_filter=True)
-    return [(s.start, s.end, s.text.strip()) for s in segments]
+    wav = path.with_suffix(".wav")
+    try:
+        run(["ffmpeg", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", "16000",
+             "-t", "1800", str(wav)])
+        if _model is None:
+            _model = WhisperModel(WHISPER_MODEL, compute_type="int8", cpu_threads=1)
+        segments, _ = _model.transcribe(str(wav), vad_filter=True, beam_size=1)
+        return [(s.start, s.end, s.text.strip()) for s in segments]
+    except Exception:
+        return []
+    finally:
+        wav.unlink(missing_ok=True)
 
 
 def score_window(segs, a, b):
@@ -128,11 +136,11 @@ def write_srt(segs, start, end, path):
 
 def ratio_filter(ratio):
     if ratio == "9:16":
-        return "crop='min(iw,ih*9/16)':ih,scale=1080:1920"
+        return "crop='min(iw,ih*9/16)':ih,scale=720:1280"
     if ratio == "1:1":
-        return "crop='min(iw,ih)':'min(iw,ih)',scale=1080:1080"
-    return ("scale=1920:1080:force_original_aspect_ratio=decrease,"
-            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2")
+        return "crop='min(iw,ih)':'min(iw,ih)',scale=720:720"
+    return ("scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(ow-iw)/2:(oh-ih)/2")
 
 
 def cut_clip(src, clip, out, ratio, srt, style):
@@ -143,7 +151,7 @@ def cut_clip(src, clip, out, ratio, srt, style):
         cwd = srt.parent
     run(["ffmpeg", "-y", "-ss", str(clip["start"]), "-i", str(src.resolve()),
          "-t", str(clip["end"] - clip["start"]), "-vf", vf,
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "1",
          "-c:a", "aac", "-movflags", "+faststart", str(out.resolve())], cwd=cwd)
 
 
@@ -179,7 +187,7 @@ def process(
             raise HTTPException(413, f"El archivo supera {MAX_MB} MB.")
 
         total = video_duration(src)
-        segs = transcribe(src)
+        segs = transcribe(src) if captions else []
         picks = pick_clips(segs, total, duration, clips)
 
         zpath = work / "clips.zip"
